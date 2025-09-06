@@ -37,6 +37,21 @@
             <version>${project.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>nonogram-reader-sax</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>nonogram-reader-stax</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>nonogram-reader-dom</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

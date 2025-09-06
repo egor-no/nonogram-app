@@ -5,3 +5,8 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+
+nonogram:
+  io:
+    reader: sax     # варианты: dom | sax | stax | jackson
+    writer: sax     # варианты: dom | sax | stax

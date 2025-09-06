@@ -30,7 +30,6 @@ public class NonogramService {
         this.writer = writer;
     }
 
-    /** кейс 1: читаем файл .JPNXML → строим Crossword → решаем → отдаем оба */
     public Result readAndSolve(InputStream in) {
         Crossword cw = reader.read(in);
         Solution sol = solver.solve(cw);
