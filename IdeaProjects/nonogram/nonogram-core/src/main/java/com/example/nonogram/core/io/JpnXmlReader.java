@@ -4,5 +4,5 @@ import com.example.nonogram.core.model.Crossword;
 import java.io.InputStream;
 
 public interface JpnXmlReader {
-    Crossword read(InputStream in);
+    Crossword read(InputStream in) throws JpnXmlReaderException;
 }
