@@ -5,6 +5,7 @@ import com.example.nonogram.core.io.JpnXmlWriter;
 import com.example.nonogram.core.model.Crossword;
 import com.example.nonogram.core.model.Solution;
 import com.example.nonogram.core.Solver;
+import com.example.nonogram.util.BuiltinPuzzles;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
@@ -22,13 +23,18 @@ public class NonogramService {
     private final Solver solver;
     private final AntiSolver antiSolver;
     private final JpnXmlWriter writer;
+    private final BuiltinPuzzles builtin;
 
-    public NonogramService(JpnXmlReader reader, Solver solver,
-                           AntiSolver antiSolver, JpnXmlWriter writer) {
+    public NonogramService(JpnXmlReader reader,
+                           Solver solver,
+                           AntiSolver antiSolver,
+                           JpnXmlWriter writer,
+                           BuiltinPuzzles builtin) {
         this.reader = reader;
         this.solver = solver;
         this.antiSolver = antiSolver;
         this.writer = writer;
+        this.builtin = builtin;
     }
 
     public Result readAndSolve(InputStream in) {
@@ -43,21 +49,16 @@ public class NonogramService {
         }
     }
 
+    public Result readAndSolveBuiltin(String name) throws IOException {
+        try (InputStream in = builtin.open(name)) {
+            return readAndSolve(in);
+        }
+    }
+
     public void saveAsJpnXml(Solution solution, OutputStream out) {
         boolean[][] grid = toGrid(solution);
         Crossword cw = antiSolver.antiSolve(grid);
         writer.write(cw, out);
-    }
-
-    private static boolean[][] toGrid(Solution s) {
-        int h = s.height(), w = s.width();
-        boolean[][] g = new boolean[h][w];
-        for (int r = 0; r < h; r++) {
-            for (int c = 0; c < w; c++) {
-                g[r][c] = s.isFilled(r, c);
-            }
-        }
-        return g;
     }
 
     public void saveAsJpnXml(Solution solution, Path path) throws IOException {
@@ -71,6 +72,17 @@ public class NonogramService {
             writer.write(cw, out);
             return out.toByteArray();
         }
+    }
+
+    private static boolean[][] toGrid(Solution s) {
+        int h = s.height(), w = s.width();
+        boolean[][] g = new boolean[h][w];
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < w; c++) {
+                g[r][c] = s.isFilled(r, c);
+            }
+        }
+        return g;
     }
 
     public record Result(Crossword crossword, Solution solution) {}
