@@ -7,6 +7,7 @@ import com.example.nonogram.core.model.Solution;
 import com.example.nonogram.core.Solver;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -62,6 +63,13 @@ public class NonogramService {
     public void saveAsJpnXml(Solution solution, Path path) throws IOException {
         try (OutputStream out = Files.newOutputStream(path)) {
             saveAsJpnXml(solution, out);
+        }
+    }
+
+    public byte[] writeToBytes(Crossword cw) throws java.io.IOException {
+        try (var out = new ByteArrayOutputStream()) {
+            writer.write(cw, out);
+            return out.toByteArray();
         }
     }
 

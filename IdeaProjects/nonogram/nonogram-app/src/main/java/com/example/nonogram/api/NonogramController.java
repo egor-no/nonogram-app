@@ -10,9 +10,11 @@ import com.example.nonogram.core.model.Solution;
 import com.example.nonogram.service.NonogramService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.io.InputStream;
 
 @RestController
@@ -49,5 +51,16 @@ public class NonogramController {
         var cw = antiSolver.antiSolve(grid.filled());
         return Mapper.toDto(cw);
     }
-    
+
+    @PostMapping(value = "/export/jpnxml",
+            consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<byte[]> exportJpnXml(@Valid @RequestBody GridDto grid) throws IOException {
+        var cw   = antiSolver.antiSolve(grid.filled());
+        var data = service.writeToBytes(cw);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_XML)
+                .header("Content-Disposition", "attachment; filename=\"nonogram.jpnxml\"")
+                .body(data);
+    }
 }
