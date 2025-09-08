@@ -11,7 +11,7 @@ import java.util.List;
 public class JPNAntiSolver implements AntiSolver {
 
     @Override
-    public Crossword fromFilled(boolean[][] filled) {
+    public Crossword antiSolve(boolean[][] filled) {
         validateRect(filled);
 
         List<List<Integer>> rows = new ArrayList<>();

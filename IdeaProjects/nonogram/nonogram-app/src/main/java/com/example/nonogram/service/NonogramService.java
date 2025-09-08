@@ -43,8 +43,20 @@ public class NonogramService {
     }
 
     public void saveAsJpnXml(Solution solution, OutputStream out) {
-        Crossword cw = antiSolver.antiSolve(solution);
+        boolean[][] grid = toGrid(solution);
+        Crossword cw = antiSolver.antiSolve(grid);
         writer.write(cw, out);
+    }
+
+    private static boolean[][] toGrid(Solution s) {
+        int h = s.height(), w = s.width();
+        boolean[][] g = new boolean[h][w];
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < w; c++) {
+                g[r][c] = s.isFilled(r, c);
+            }
+        }
+        return g;
     }
 
     public void saveAsJpnXml(Solution solution, Path path) throws IOException {
