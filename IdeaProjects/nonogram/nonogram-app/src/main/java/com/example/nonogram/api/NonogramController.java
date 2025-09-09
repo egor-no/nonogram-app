@@ -12,6 +12,7 @@ import com.example.nonogram.util.BuiltinPuzzles;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -21,6 +22,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api")
+@Validated
 public class NonogramController {
 
     private final Solver solver;
@@ -61,17 +63,21 @@ public class NonogramController {
         return Mapper.toDto(result.solution());
     }
 
-    @PostMapping(value = "/export/jpnxml",
+    @PostMapping(
+            value = "/antisolve",
             consumes = MediaType.APPLICATION_JSON_VALUE,
-            produces = MediaType.APPLICATION_XML_VALUE)
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
     public CrosswordDto antiSolve(@Valid @RequestBody GridDto grid) {
         var cw = antiSolver.antiSolve(grid.filled());
         return Mapper.toDto(cw);
     }
 
-    @PostMapping(value = "/export/jpnxml",
+    @PostMapping(
+            value = "/export/jpnxml",
             consumes = MediaType.APPLICATION_JSON_VALUE,
-            produces = MediaType.APPLICATION_XML_VALUE)
+            produces = MediaType.APPLICATION_XML_VALUE
+    )
     public ResponseEntity<byte[]> exportJpnXml(
             @Valid @RequestBody GridDto grid,
             @RequestParam(name = "name", required = false, defaultValue = "nonogram") String name
