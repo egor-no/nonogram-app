@@ -58,7 +58,7 @@ public class NonogramController {
     }
 
     @GetMapping(value = "/solve/builtin/{name}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public SolutionDto solveBuiltin(@PathVariable String name) throws IOException {
+    public SolutionDto solveBuiltin(@PathVariable("name") String name) throws IOException {
         var result = service.readAndSolveBuiltin(name);
         return Mapper.toDto(result.solution());
     }
