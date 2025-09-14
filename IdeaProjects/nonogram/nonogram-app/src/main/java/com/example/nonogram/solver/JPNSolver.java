@@ -6,584 +6,574 @@ import com.example.nonogram.core.model.Solution;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 @Component
 public class JPNSolver implements Solver {
 
+    // ---- Данные кроссворда ----
     private int height;
     private int width;
     private List<List<Integer>> rows;
     private List<List<Integer>> columns;
 
-    private CellState[][] process;
-    private List<CellState[]> variants;
-    private ArrayList<Integer> solved;
+    // ---- Состояние решения ----
+    private CellState[][] process;                     // 0=UNKNOWN, 1=FILLED, 2=BLANK
+    private List<CellState[]> variants;                // список допустимых вариантов для текущей линии
+    private ArrayList<Integer> solved;                 // история прогресса (кол-во НЕ-UNKNOWN)
 
-    private int[] amounts;
+    // ---- Рабочие поля (как в старом Solvation) ----
+    private int[] amounts = new int[3];                // [кол-во блоков, кол-во пустых, суммарно]
+    private ArrayList<Integer> numbers;                // текущие числа подсказки для линии
+    private int variantPointer = 0;                    // p
+    private int variantsPrinted = 0;                   // printed
+    private int size;                                  // длина текущей линии
+    private int number;                                // индекс текущей линии
+    private int side;                                  // 0 = row/left, 1 = col/top
+    private boolean solutionFound;                     // для brute-force ветки
+    private byte[] now;                                // слепок линии: 0,1,2
 
-    private void initNewSolutionProcess(Crossword crossword) {
-        height = crossword.height();
-        width = crossword.width();
-        rows = crossword.getRows();
-        columns = crossword.getColumns();
-        solved = new ArrayList<>();
-        amounts = new int[3];
-
-        process = new CellState[height][width];
-        for (int  i = 0; i < height; i++) {
-            for (int  j = 0; j < width; j++) {
-                process[i][j] = CellState.UNKNOWN;
-            }
-        }
-    }
-
-    @Override public Solution solve(Crossword crossword) {
+    // ---- Solver API ----
+    @Override
+    public Solution solve(Crossword crossword) {
         initNewSolutionProcess(crossword);
 
+        // РОВНО как в твоём старом коде:
         int a = 0;
-        while(!isSolved()) {
-            if (isGuessAndCheckNeeded()) {
-                if (nonfilledCells() < 20) {
-                    resolveByBruteForce();
-                } else {
-                    backtrackSolve();
-                }
-                continue;
-            }
-
+        while (!isSolved(false)) {
             for (int i = 0; i < height; i++)
-                makeVariations(i, true, a);
+                makeVariations(i, 0, a);      // строки
             for (int i = 0; i < width; i++)
-                makeVariations(i, false, a);
+                makeVariations(i, 1, a);      // колонки
             a++;
+
+            // маленькая пауза из старого кода не нужна в сервере; логически опустим
         }
 
         return Solution.of(crossword, toBooleanGrid(process));
     }
 
-    private boolean[][] toBooleanGrid(CellState[][] process) {
-        int h = process.length;
-        int w = process[0].length;
-        boolean[][] grid = new boolean[h][w];
+    // ---- Инициализация ----
+    private void initNewSolutionProcess(Crossword crossword) {
+        height = crossword.height();
+        width = crossword.width();
+        rows = crossword.getRows();
+        columns = crossword.getColumns();
 
-        for (int r = 0; r < h; r++) {
-            for (int c = 0; c < w; c++) {
-                grid[r][c] = (process[r][c] == CellState.FILLED);
-            }
+        solved = new ArrayList<>();
+        Arrays.fill(amounts, 0);
+
+        process = new CellState[height][width];
+        for (int r = 0; r < height; r++) {
+            Arrays.fill(process[r], CellState.UNKNOWN);
         }
-
-        return grid;
     }
 
-    public boolean isSolved() {
-        int kol = width * height;
-        int kolSolved = 0;
-
-        for (int i = 0; i < height ; i++)
-            for (int j = 0; j < width; j++)
-                if (process[i][j] != CellState.UNKNOWN)
-                    kolSolved++;
-        solved.add(kolSolved);
-
-        if (kolSolved == kol)
-            return true;
-        else
-            return false;
+    private boolean[][] toBooleanGrid(CellState[][] grid) {
+        boolean[][] out = new boolean[height][width];
+        for (int r = 0; r < height; r++)
+            for (int c = 0; c < width; c++)
+                out[r][c] = (grid[r][c] == CellState.FILLED);
+        return out;
     }
 
-    private boolean isGuessAndCheckNeeded() {
-        if (solved.size() > 3)
-            if (solved.get(solved.size()-1).equals(solved.get(solved.size()-2))
-                    && solved.get(solved.size()-2).equals(solved.get(solved.size()-3)))
-                    return true;
-        return false;
-    }
+    // ---- Перенос makeVariations из старого кода (без TableModel) ----
+    public void makeVariations(int n, int side, int before) {
+        // reset принтеров вариантов
+        variantPointer = 0;
+        variantsPrinted = 0;
 
-    /**
-     * Решает одну линию (строку или столбец) по подсказкам:
-     * @param index  номер строки/столбца
-     * @param isRow  true — работаем со строкой, false — со столбцом
-     * @param phase  0 — быстрые эвристики; 1 — генерация вариантов и консенсус
-     */
-    private void makeVariations(int index, boolean isRow, int phase) {
-        final int lineLen = isRow ? width : height;
-        final List<Integer> clues = isRow ? rows.get(index) : columns.get(index);
+                    this.side = side;     // 0=row, 1=col
+                    this.number = n;
 
-        // Снимок текущей линии из process
-        CellState[] line = new CellState[lineLen];
-        for (int i = 0; i < lineLen; i++) {
-            int r = isRow ? index : i;
-            int c = isRow ? i     : index;
-            line[i] = process[r][c];
-        }
+                    // Подтянуть numbers и now/size из process
+                    if (side == 0) { // row/left
+                        numbers = new ArrayList<>(rows.get(n));
+                        size = width;
+                        now = new byte[size];
+                        for (int i = 0; i < size; i++) {
+                            CellState cs = process[n][i];
+                            now[i] = toCode(cs);
+                        }
+                    } else { // col/top
+                        numbers = new ArrayList<>(columns.get(n));
+                        size = height;
+                        now = new byte[size];
+                        for (int i = 0; i < size; i++) {
+                            CellState cs = process[i][n];
+                            now[i] = toCode(cs);
+                        }
+                    }
 
-        if (phase == 0) {
-            // Эвристика перекрытий (гарантированные FILLED)
-            filledHeuristics(line, clues, isRow, index);
+                    if (before == 0) {
+                        // findBlack (перекрытия)
+                        findBlack();
 
-            // Если в линии нет блоков, вся линия BLANK
-            if (clues.isEmpty()) {
-                for (int i = 0; i < lineLen; i++) {
-                    int r = isRow ? index : i;
-                    int c = isRow ? i     : index;
-                    process[r][c] = CellState.BLANK;
-                }
-            }
-        } else {
-            // Генерация всех допустимых вариантов + консенсус по позициям
-            if (!lineFilled(line)) {
-                variants = new ArrayList<>();
-                // рабочий буфер для сборки варианта
-                CellState[] work = new CellState[lineLen];
-                // инициализируем UNKNOWN
-                for (int i = 0; i < lineLen; i++) work[i] = CellState.UNKNOWN;
+                        // если пустая подсказка — вся линия BLANK
+                        if (numbers.size() == 0) {
+                            for (int i = 0; i < size; i++) {
+                                putCell(side, number, i, CellState.BLANK);
+                            }
+                        }
+                    } else if (!isLineFilled(side, number)) {
+                        // расчёт amounts как в старом коде
+                        amounts[0] = numbers.size();
+                        int sum = 0;
+                        for (int i = 0; i < amounts[0]; i++) sum += numbers.get(i);
 
-                generateLineVariants(0, 0, line, work, clues);
+                        amounts[1] = size - sum - (amounts[0] - 1); // пустые клетки
+                        amounts[2] = amounts[1] + amounts[0];
 
-                // Фиксируем клетки, одинаковые во всех вариантах
-                for (int i = 0; i < lineLen; i++) {
-                    CellState consensus = checkConsensusAt(i);
-                    if (consensus != CellState.UNKNOWN) {
-                        int r = isRow ? index : i;
-                        int c = isRow ? i     : index;
-                        process[r][c] = consensus;
+                        variants = new ArrayList<>();
+                        // первый буфер-вариант
+                        variants.add(new CellState[size]);
+                        Arrays.fill(variants.get(0), null);
+
+                        // генерация перестановок по старой логике
+                        solver(0);
+
+                        // Консенсус по позициям (аналог check(i) + проставление в table)
+                        if (!variants.isEmpty()) {
+                            int cnt = variants.get(0).length;
+                            for (int i = 0; i < cnt; i++) {
+                                CellState consensus = consensusAt(i);
+                    if (consensus != null) {
+                        if (side == 0) {
+                            putCell(0, number, i, consensus);
+                        } else {
+                            putCell(1, i, number, consensus);
+                        }
+                    } else {
+                        // неизвестно
+                        if (side == 0) putCell(0, number, i, CellState.UNKNOWN);
+                        else putCell(1, i, number, CellState.UNKNOWN);
                     }
                 }
             }
-        }
 
-        // Вызов эвристики на «краях»
-        // если это первая линия ИЛИ последняя по своему измерению
-        if (index == 0 || (isRow && index == height - 1) || (!isRow && index == width - 1)) {
-            edgeHeuristics();
+            // эвристика краёв как в старом: для первой/последней линии измерения
+//            if (n == 0 || (side == 0 && n == width - 1) || (side == 1 && n == height - 1))
+//                heuristics();
+
+            if (n == 0 || (side == 0 && n == height - 1) || (side == 1 && n == width - 1))
+                heuristics();
+
+            variants.clear();
+            variants = null;
         }
     }
 
-    /**
-     * Рекурсивно генерируем все допустимые варианты линии,
-     * соблюдая подсказки и уже известные клетки (line).
-     *
-     * @param posStart  позиция, с которой можно ставить следующий блок или BLANK
-     * @param clueIdx   индекс текущего блока в clues
-     * @param baseLine  «база» из process (может содержать FIX/BLANK/UNKNOWN)
-     * @param work      формируемый вариант (в конце без UNKNOWN)
-     * @param clues     список длин блоков
-     */
-    private void generateLineVariants(int posStart, int clueIdx,
-                                      CellState[] baseLine,
-                                      CellState[] work,
-                                      List<Integer> clues) {
-        final int n = baseLine.length;
+    // ---- Генератор вариантов (старая логика solver) ----
+    private void solver(int pos) {
+        boolean done;
+        int k = 0;
 
-        // Все блоки размещены — остаток заполняем BLANK (если не противоречит baseLine)
-        if (clueIdx == clues.size()) {
-            // Заполнить хвост BLANK
-            for (int i = posStart; i < n; i++) {
-                if (baseLine[i] == CellState.FILLED) return; // конфликт
-                work[i] = CellState.BLANK;
-            }
-            // Также убедимся, что все ранние позиции определены
-            for (int i = 0; i < posStart; i++) {
-                if (work[i] == CellState.UNKNOWN) {
-                    // если baseLine фиксирует — поставим её значение,
-                    // иначе это ранее выставленные значения, здесь не должно быть UNKNOWN
-                    work[i] = (baseLine[i] != CellState.UNKNOWN) ? baseLine[i] : CellState.BLANK;
-                }
-            }
-            variants.add(work.clone());
+        if (pos == size) {
+            printVariant();
             return;
         }
 
-        // Вычисляем максимально допустимую стартовую позицию для текущего блока
-        int blocksLeft = clues.size() - clueIdx;
-        int sumRemain = 0;
-        for (int t = clueIdx; t < clues.size(); t++) sumRemain += clues.get(t);
-        int latestStart = n - (sumRemain + (blocksLeft - 1)); // учёт минимальных 1 BLANK между блоками
-
-        // Попробуем разместить текущий блок длины len начиная с каждой позиции s
-        int len = clues.get(clueIdx);
-
-        // Перед началом размещения "дотянем" work до posStart, учитывая baseLine
-        for (int i = 0; i < posStart; i++) {
-            if (work[i] == CellState.UNKNOWN) {
-                if (baseLine[i] == CellState.FILLED) {
-                    work[i] = CellState.FILLED; // уважим фиксированное
+        for (int blockOrBlank = 0; blockOrBlank < 2; blockOrBlank++) {
+            done = false;
+            if (amounts[blockOrBlank] != 0) {
+                if (blockOrBlank == 0) {
+                    // ставим БЛОК
+                    k = numbers.get(numbers.size() - amounts[0]); // длина текущего блока
+                    boolean ok = true;
+                    // внутри блока не должно быть BLANK в now
+                    for (int j = 0; j < k; j++) {
+                        if (pos + j >= size || now[pos + j] == 2) { ok = false; break; }
+                    }
+                    // если будет ещё блок позже — между ними обязательно BLANK (и он не может быть FILLED в now)
+                    if (amounts[0] != 1) {
+                        if (pos + k >= size || now[pos + k] == 1) ok = false;
+                    }
+                    if (ok) {
+                        done = true;
+                        // проставим FILLED
+                        for (int j = 0; j < k; j++, pos++) {
+                            variants.get(variantPointer)[pos] = CellState.FILLED;
+                        }
+                        // разделительный BLANK (если не последний блок)
+                        if (amounts[0] != 1) {
+                            variants.get(variantPointer)[pos] = CellState.BLANK;
+                        } else {
+                            // если последний блок — откат pos на 1 и k на 1, как в старом коде
+                            pos--;
+                            k--;
+                        }
+                        amounts[blockOrBlank]--;
+                    } else {
+                        continue;
+                    }
                 } else {
-                    work[i] = CellState.BLANK;  // безопасно заполнить
-                }
-            }
-        }
-
-        for (int s = posStart; s <= latestStart; s++) {
-            // 1) промежуток перед блоком [posStart..s-1] должен быть BLANK
-            boolean ok = true;
-            for (int i = posStart; i < s; i++) {
-                if (baseLine[i] == CellState.FILLED) { ok = false; break; }
-            }
-            if (!ok) continue;
-
-            // Проставим BLANK в work на этом участке (с бэктрекингом)
-            List<Integer> touched = new ArrayList<>();
-            for (int i = posStart; i < s; i++) {
-                if (work[i] == CellState.UNKNOWN) {
-                    work[i] = CellState.BLANK;
-                    touched.add(i);
-                } else if (work[i] != CellState.BLANK) {
-                    ok = false; break;
-                }
-            }
-            if (!ok) { // откат
-                for (int i : touched) work[i] = CellState.UNKNOWN;
-                continue;
-            }
-
-            // 2) блок [s..s+len-1] должен быть FILLED и совместим с baseLine
-            if (s + len > n) {
-                for (int i : touched) work[i] = CellState.UNKNOWN;
-                continue;
-            }
-            List<Integer> blockTouched = new ArrayList<>();
-            for (int i = s; i < s + len; i++) {
-                if (baseLine[i] == CellState.BLANK) { ok = false; break; }
-                if (work[i] == CellState.UNKNOWN) {
-                    work[i] = CellState.FILLED;
-                    blockTouched.add(i);
-                } else if (work[i] != CellState.FILLED) {
-                    ok = false; break;
-                }
-            }
-            if (!ok) {
-                for (int i : blockTouched) work[i] = CellState.UNKNOWN;
-                for (int i : touched)      work[i] = CellState.UNKNOWN;
-                continue;
-            }
-
-            // 3) разделительный BLANK после блока (если есть ещё блоки)
-            int nextPos = s + len;
-            Integer sepTouched = null;
-            if (clueIdx < clues.size() - 1) {
-                if (nextPos >= n || baseLine[nextPos] == CellState.FILLED) {
-                    // нужен BLANK, но нельзя
-                    ok = false;
-                } else {
-                    if (work[nextPos] == CellState.UNKNOWN) {
-                        work[nextPos] = CellState.BLANK;
-                        sepTouched = nextPos;
-                    } else if (work[nextPos] != CellState.BLANK) {
-                        ok = false;
+                    // ставим ПУСТУЮ клетку
+                    if (now[pos] != 1) { // в now не может быть принудительно FILLED
+                        variants.get(variantPointer)[pos] = CellState.BLANK;
+                        done = true;
+                        amounts[blockOrBlank]--;
+                    } else {
+                        continue;
                     }
                 }
-                nextPos++; // следующий блок начинается после разделителя
-            }
 
-            if (ok) {
-                generateLineVariants(nextPos, clueIdx + 1, baseLine, work, clues);
-            }
+                solver(pos + 1);
 
-            // Откаты
-            if (sepTouched != null) work[sepTouched] = CellState.UNKNOWN;
-            for (int i : blockTouched) work[i] = CellState.UNKNOWN;
-            for (int i : touched)      work[i] = CellState.UNKNOWN;
-        }
-    }
-
-    /**
-     * Эвристика перекрытий: если блок длины L влезает в оставшийся интервал только частично,
-     * центральная «перекрывающаяся» часть гарантированно FILLED.
-     */
-    private void filledHeuristics(CellState[] line, List<Integer> clues, boolean isRow, int index) {
-        final int n = line.length;
-
-        int totalClues = clues.size();
-        for (int i = 0; i < totalClues; i++) {
-            int before = 0;
-            for (int j = 0; j < i; j++) before += clues.get(j) + 1; // блок + разделитель
-            int after = 0;
-            for (int j = i + 1; j < totalClues; j++) after += clues.get(j) + 1;
-
-            int remain = n - after - before;        // сколько места «под текущий блок»
-            int L = clues.get(i);
-            if (remain < 2 * L) {
-                int diff = 2 * L - remain;          // ширина перекрытия
-                int start = before + (remain - diff) / 2;
-                for (int k = 0; k < diff; k++) {
-                    int pos = start + k;
-                    int r = isRow ? index : pos;
-                    int c = isRow ? pos   : index;
-                    process[r][c] = CellState.FILLED;
-                    line[pos] = CellState.FILLED; // синхронизируем локальный снимок
+                if (done) {
+                    // откаты счётчиков и pos
+                    amounts[blockOrBlank]++;
+                    if (blockOrBlank == 0) {
+                        pos -= k;
+                    }
                 }
             }
         }
     }
 
-    /**
-     * Возвращает «консенсус» по позиции k среди всех сгенерированных variants:
-     * FILLED/BLANK, если во всех вариантах одинаково; иначе UNKNOWN.
-     */
-    private CellState checkConsensusAt(int k) {
-        if (variants == null || variants.isEmpty()) return CellState.UNKNOWN;
-        CellState first = variants.get(0)[k];
-        for (int i = 1; i < variants.size(); i++) {
-            if (variants.get(i)[k] != first) return CellState.UNKNOWN;
+    // ---- Перекрытия (findBlack) как в старом коде ----
+    private void findBlack() {
+        int before, after, remain, diff;
+        int cnt = numbers.size();
+
+        for (int i = 0; i < cnt; i++) {
+            before = 0;
+            after = 0;
+            for (int j = 0; j < i; j++) before += numbers.get(j) + 1;
+            for (int j = i + 1; j < cnt; j++) after += numbers.get(j) + 1;
+
+            remain = size - after - before;              // сколько остаётся под текущий блок
+            int L = numbers.get(i);
+            if (remain < L * 2) {
+                diff = L * 2 - remain;                   // ширина обязательного перекрытия
+                for (int l = 0, k = before + (remain - diff) / 2; l < diff; k++, l++) {
+                    if (side == 0) {
+                        putCell(0, number, k, CellState.FILLED);
+                    } else {
+                        putCell(1, k, number, CellState.FILLED);
+                    }
+                }
+            }
         }
-        return first;
     }
 
-    private boolean lineFilled(CellState[] line) {
-        for (CellState cs : line) if (cs == CellState.UNKNOWN) return false;
-        return true;
-    }
-
-    private void edgeHeuristics() {
-        int blockLength;
-
+    // ---- Краевые эвристики (heuristics) как в старом коде ----
+    private void heuristics() {
+        // колонки
         for (int i = 0; i < width; i++) {
             if (!columns.get(i).isEmpty()) {
                 if (process[0][i] == CellState.FILLED) {
-                    blockLength = columns.get(i).get(0);
-                    for (int j = 1; j < blockLength; j++)
+                    int n = columns.get(i).get(0);
+                    for (int j = 1; j < n && j < height; j++)
                         process[j][i] = CellState.FILLED;
-                    if (blockLength < height)
-                        process[blockLength][i] = CellState.BLANK;
+                    if (n < height) process[n][i] = CellState.BLANK;
                 }
-                if (process[height-1][i] == CellState.FILLED) {
-                    blockLength = columns.get(i).get(columns.get(i).size() - 1);
-                    for (int j = 1; j < blockLength; j++)
-                        process[height - j - 1][i] = CellState.FILLED;
-                    if (blockLength < height)
-                        process[height - blockLength - 1][i] = CellState.BLANK;
+                if (process[height - 1][i] == CellState.FILLED) {
+                    int n = columns.get(i).get(columns.get(i).size() - 1);
+                    for (int j = 1; j <= n && j < height; j++)
+                        process[height - j][i] = CellState.FILLED;
+                    if (n < height) process[height - n - 1][i] = CellState.BLANK;
                 }
             }
         }
-
+        // строки
         for (int i = 0; i < height; i++) {
             if (!rows.get(i).isEmpty()) {
                 if (process[i][0] == CellState.FILLED) {
-                    blockLength = rows.get(i).get(0);
-                    for (int j = 1; j < blockLength; j++)
+                    int n = rows.get(i).get(0);
+                    for (int j = 1; j < n && j < width; j++)
                         process[i][j] = CellState.FILLED;
-                    if (blockLength < width)
-                        process[i][blockLength] = CellState.BLANK;
+                    if (n < width) process[i][n] = CellState.BLANK;
                 }
-                if (process[i][width-1] == CellState.FILLED) {
-                    blockLength = rows.get(i).get(rows.get(i).size() - 1);
-                    for (int j = 1; j < blockLength; j++)
-                        process[i][width - j - 1] = CellState.FILLED;
-                    if (blockLength < width)
-                        process[i][width - blockLength - 1] = CellState.BLANK;
+                if (process[i][width - 1] == CellState.FILLED) {
+                    int n = rows.get(i).get(rows.get(i).size() - 1);
+                    for (int j = 2; j <= n && j <= width; j++)
+                        process[i][width - j] = CellState.FILLED;
+                    if (n < width) process[i][width - n - 1] = CellState.BLANK;
                 }
             }
         }
     }
 
-    private void resolveByBruteForce() {
-        List<int[]> index = new ArrayList<>();
-        for (int r = 0; r < height; r++) {
-            for (int c = 0; c < width; c++) {
-                if (process[r][c] == CellState.UNKNOWN) {
-                    index.add(new int[]{r, c});
+    // ---- Старый check() заменим на консенсус по variants ----
+    private CellState consensusAt(int k) {
+        if (variants == null || variants.isEmpty()) return null;
+        // удалим «незаполненный» хвост последнего варианта (как в старом if (!variants.isEmpty()&&variants.get(last)[k]==null) remove)
+        int last = variants.size() - 1;
+        boolean tailNull = (variants.get(last)[k] == null);
+        if (tailNull) {
+            variants.remove(last);
+            if (variants.isEmpty()) return null;
+        }
+
+        CellState first = variants.get(0)[k];
+        for (int i = 1; i < variants.size(); i++) {
+            if (variants.get(i)[k] != first) {
+                return CellState.UNKNOWN;
+            }
+        }
+        return first; // FILLED или BLANK
+    }
+
+    private void printVariant() {
+        variantsPrinted++;
+        if (variantPointer >= variants.size()) {
+            // Теоретически не должно случаться, но пусть будет безопасно.
+            variants.add(new CellState[size]);
+        }
+        CellState[] src = variants.get(variantPointer);
+        if (src == null) src = new CellState[size];
+        int len = src.length;
+
+        CellState[] dst;
+        if (variantPointer < variants.size() - 1) {
+            dst = variants.get(variantPointer + 1);
+            if (dst == null || dst.length != len) {
+                dst = new CellState[len];
+                variants.set(variantPointer + 1, dst);
+            }
+        } else {
+            dst = new CellState[len];
+            variants.add(dst);
+        }
+
+        if (len > 0) System.arraycopy(src, 0, dst, 0, len);
+        variantPointer++;
+    }
+
+    // ---- Проверки завершения / застой / поиск (ровно как раньше) ----
+    public boolean isSolved(boolean search) {
+        int total = width * height;
+        int solvedCells = 0;
+
+        for (int r = 0; r < height; r++)
+            for (int c = 0; c < width; c++)
+                if (process[r][c] != CellState.UNKNOWN)
+                    solvedCells++;
+        solved.add(solvedCells);
+
+        if (solved.size() > 3) {
+            int n = solved.size();
+            if (solved.get(n - 1).equals(solved.get(n - 2)) &&
+                    solved.get(n - 2).equals(solved.get(n - 3))) {
+                if (!search) {
+                    solutionFound = false;
+                    search();
+                    if (solutionFound) solvedCells = total;
+                } else {
+                    return true;
                 }
             }
         }
-        subgenerate(0, index);
+        return solvedCells == total;
     }
 
-    private boolean subgenerate(int pos, List<int[]> index) {
-        int size = index.size();
-        if (pos == size)
-            return checkBruteforceConsistency(index);
-
-        int[] rc = index.get(pos);
-        int r = rc[0], c = rc[1];
-
-        for (int code = 1; code <= 2; code++) { // 1 = FILLED, 2 = BLANK
-            process[r][c] = CellState.fromCode(code);
-            if (subgenerate(pos + 1, index)) {
-                return true;
-            }
+    private void search() {
+        if (nonfilledCells() < 20) {
+            // Полный перебор по всем UNKNOWN
+            ArrayList<int[]> index = new ArrayList<>();
+            for (int c = 0; c < width; c++)
+                for (int r = 0; r < height; r++)
+                    if (process[r][c] == CellState.UNKNOWN)
+                        index.add(new int[]{r, c});
+            solutionFound = false;
+            subgenerate(0, index, index.size());
+            return;
         }
 
-        process[r][c] = CellState.UNKNOWN;
-        return false;
-    }
+        // Бэктрекинг: берём первую UNKNOWN-клетку и пробуем FILLED/BLANK
+        CellState[][] reserve = cloneGrid(process);
 
-    private boolean checkBruteforceConsistency(List<int[]> index) {
-        if (index == null || index.isEmpty()) {
-            return true;
-        }
-
-        boolean[] rowsToCheck = new boolean[height];
-        boolean[] colsToCheck = new boolean[width];
-        for (int[] rc : index) {
-            int r = rc[0];
-            int c = rc[1];
-            if (r >= 0 && r < height) rowsToCheck[r] = true;
-            if (c >= 0 && c < width)  colsToCheck[c] = true;
-        }
-
-        for (int r = 0; r < height; r++) {
-            if (rowsToCheck[r] && !rowMatchesClues(r)) {
-                return false;
-            }
-        }
-
+        outer:
         for (int c = 0; c < width; c++) {
-            if (colsToCheck[c] && !colMatchesClues(c)) {
-                return false;
-            }
-        }
+            for (int r = 0; r < height; r++) {
+                if (process[r][c] != CellState.UNKNOWN) continue;
 
-        return true;
-    }
+                // обновим историю прогресса (как в старом коде)
+                int last = solved.isEmpty() ? 0 : solved.get(solved.size() - 1);
+                solved.clear();
+                solved.add(last);
 
-    private boolean rowMatchesClues(int r) {
-        List<Integer> runs = new ArrayList<>();
-        int j = 0;
-        while (j < width) {
-            if (process[r][j] == CellState.FILLED) {
-                int k = 0;
-                while (j < width && process[r][j] == CellState.FILLED) {
-                    k++; j++;
+                // -------- попытка 1: FILLED --------
+                process[r][c] = CellState.FILLED;
+                int prev = -1;
+                do {
+                    int cur = solved.isEmpty() ? 0 : solved.get(solved.size() - 1);
+                    if (cur == prev) break; // нет прогресса — выходим из do/while
+                    prev = cur;
+
+                    for (int f = 0; f < height; f++) makeVariations(f, 0, 1);
+                    for (int f = 0; f < width;  f++) makeVariations(f, 1, 1);
+                } while (!isSolved(true));
+
+                // если полная проверка прошла — фиксируем и выходим
+                if (checkBigSearch()) {
+                    break outer;
                 }
-                runs.add(k);
-            } else {
-                j++;
-            }
-        }
 
-        List<Integer> clue = rows.get(r);
-        if (runs.size() != clue.size())
-            return false;
-        for (int i = 0; i < runs.size(); i++) {
-            if (!runs.get(i).equals(clue.get(i)))
-                return false;
-        }
-        return true;
-    }
+                // -------- попытка 2: BLANK --------
+                copyGrid(reserve, process);
 
-    private boolean colMatchesClues(int c) {
-        List<Integer> runs = new ArrayList<>();
-        int i = 0;
-        while (i < height) {
-            if (process[i][c] == CellState.FILLED) {
-                int k = 0;
-                while (i < height && process[i][c] == CellState.FILLED) {
-                    k++; i++;
+                // сброс прогресса как в старом: сохраняем только последнюю метрику
+                last = solved.isEmpty() ? 0 : solved.get(solved.size() - 1);
+                solved.clear();
+                solved.add(last);
+
+                process[r][c] = CellState.BLANK;
+                prev = -1;
+                do {
+                    int cur = solved.isEmpty() ? 0 : solved.get(solved.size() - 1);
+                    if (cur == prev) break; // нет прогресса — выходим из do/while
+                    prev = cur;
+
+                    for (int f = 0; f < height; f++) makeVariations(f, 0, 1);
+                    for (int f = 0; f < width;  f++) makeVariations(f, 1, 1);
+                } while (!isSolved(true));
+
+                // если полная проверка прошла — фиксируем и выходим
+                if (checkBigSearch()) {
+                    break outer;
                 }
-                runs.add(k);
-            } else {
-                i++;
+
+                // Обе ветки не дали валидной полной разметки — откатываем
+                copyGrid(reserve, process);
+                break outer;
             }
         }
-
-        List<Integer> clue = columns.get(c);
-        if (runs.size() != clue.size())
-            return false;
-        for (int t = 0; t < runs.size(); t++) {
-            if (!runs.get(t).equals(clue.get(t)))
-                return false;
-        }
-        return true;
     }
 
-    private void backtrackSolve() {
-        CellState[][] reserve = new CellState[height][width];
-        copyGrid(process, reserve);
 
-        for (int i = 0; i < width; i++)
-            for (int j = 0; j < height; j++)
-                if (process[j][i] == CellState.UNKNOWN) {
-                    int temp = solved.get(solved.size()-1);
-                    solved.clear();
-                    solved.add(temp);
+    private void subgenerate(int pos, ArrayList<int[]> index, int size) {
+        if (pos == size) {
+            solutionFound = checkSearch(index);
+            return;
+        }
+        if (!solutionFound) {
+            for (int code = 1; code < 3 && !solutionFound; code++) {
+                int r = index.get(pos)[0], c = index.get(pos)[1];
+                process[r][c] = CellState.fromCode(code); // 1=FILLED, 2=BLANK
+                subgenerate(pos + 1, index, size);
+            }
+        }
+    }
 
-                    process[j][i] = CellState.FILLED;
-                    do {
-                        for (int f = 0; f < height; f++)
-                            makeVariations(f, true, 1);
-                        for (int f = 0; f < width; f++)
-                            makeVariations(f, false, 1);
+    private boolean checkSearch(ArrayList<int[]> index) {
+        // Проверка строк, затронутых в index
+        int k, p;
+        boolean ok = true;
+
+        for (int i = 0; i < index.size(); i++) {
+            int row = index.get(i)[0];
+            p = 0;
+            for (int j = 0; j < width; j++) {
+                if (process[row][j] == CellState.FILLED) {
+                    k = 0;
+                    while (j < width && process[row][j] == CellState.FILLED) { k++; j++; }
+                    if (p >= rows.get(row).size() || !rows.get(row).get(p).equals(k)) {
+                        ok = false; break;
                     }
-                    while(!isSolved() && !isGuessAndCheckNeeded());
-
-                    if (!checkBacktrackSolve()) {
-                        copyGrid(reserve, process);
-                        process[j][i] = CellState.BLANK;
-                        do {
-                            for (int f = 0; f < height; f++)
-                                makeVariations(f, true, 1);
-                            for (int f = 0; f < width; f++)
-                                makeVariations(f, false, 1);
-                        }
-                        while(!isSolved() && !isGuessAndCheckNeeded());
-                    }
-                    return;
+                    p++;
                 }
+            }
+            if (!ok) break;
+        }
+        if (!ok) return false;
+
+        // Проверка колонок, затронутых в index
+        for (int i = 0; i < index.size(); i++) {
+            int col = index.get(i)[1];
+            p = 0;
+            for (int j = 0; j < height; j++) {
+                if (process[j][col] == CellState.FILLED) {
+                    k = 0;
+                    while (j < height && process[j][col] == CellState.FILLED) { k++; j++; }
+                    if (p >= columns.get(col).size() || !columns.get(col).get(p).equals(k)) {
+                        ok = false; break;
+                    }
+                    p++;
+                }
+            }
+            if (!ok) break;
+        }
+        return ok;
     }
 
-    private boolean checkBacktrackSolve() {
+    private boolean checkBigSearch() {
+        // Полная проверка всех строк
         for (int r = 0; r < height; r++) {
-            List<Integer> expected = rows.get(r);
-            List<Integer> actual = extractBlocks(process[r]);
-            if (!expected.equals(actual)) {
-                return false;
-            }
+            List<Integer> runs = extractRuns(process[r]);
+            if (runs.size() != rows.get(r).size()) return false;
+            for (int i = 0; i < runs.size(); i++)
+                if (!runs.get(i).equals(rows.get(r).get(i))) return false;
         }
-
+        // Полная проверка всех колонок
         for (int c = 0; c < width; c++) {
-            List<Integer> expected = columns.get(c);
-            List<Integer> actual = extractBlocks(getColumn(c));
-            if (!expected.equals(actual)) {
-                return false;
-            }
+            List<Integer> runs = extractRuns(getCol(c));
+            if (runs.size() != columns.get(c).size()) return false;
+            for (int i = 0; i < runs.size(); i++)
+                if (!runs.get(i).equals(columns.get(c).get(i))) return false;
         }
-
         return true;
     }
 
-    private List<Integer> extractBlocks(CellState[] line) {
-        List<Integer> blocks = new ArrayList<>();
-        int count = 0;
-        for (CellState cell : line) {
-            if (cell == CellState.FILLED) {
-                count++;
-            } else {
-                if (count > 0) {
-                    blocks.add(count);
-                    count = 0;
-                }
-            }
+    // ---- Вспомогательное ----
+    private boolean isLineFilled(int side, int idx) {
+        if (side == 0) {
+            for (int c = 0; c < width; c++) if (process[idx][c] == CellState.UNKNOWN) return false;
+        } else {
+            for (int r = 0; r < height; r++) if (process[r][idx] == CellState.UNKNOWN) return false;
         }
-        if (count > 0) {
-            blocks.add(count);
-        }
-        return blocks;
+        return true;
     }
 
-    private CellState[] getColumn(int c) {
-        CellState[] col = new CellState[height];
-        for (int r = 0; r < height; r++) {
-            col[r] = process[r][c];
+    private List<Integer> extractRuns(CellState[] line) {
+        List<Integer> runs = new ArrayList<>();
+        int k = 0;
+        for (CellState cs : line) {
+            if (cs == CellState.FILLED) k++;
+            else if (k > 0) { runs.add(k); k = 0; }
         }
-        return col;
+        if (k > 0) runs.add(k);
+        return runs;
     }
 
     private int nonfilledCells() {
-        int kol = 0;
-        for (int i = 0; i < height; i++)
-            for (int j = 0; j < width; j++ )
-                if (process[i][j] == CellState.UNKNOWN)
-                    kol++;
-        return kol;
+        int cnt = 0;
+        for (int r = 0; r < height; r++)
+            for (int c = 0; c < width; c++)
+                if (process[r][c] == CellState.UNKNOWN) cnt++;
+        return cnt;
     }
 
-    private void copyGrid(CellState[][] source, CellState[][] target) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                target[i][j] = source[i][j];
-            }
+    private CellState[] getCol(int c) {
+        CellState[] col = new CellState[height];
+        for (int r = 0; r < height; r++) col[r] = process[r][c];
+        return col;
+    }
+
+    private void putCell(int side, int row, int col, CellState s) {
+        if (side == 0) { // фиксируем строку (row = номер строки, col = позиция в строке)
+            process[row][col] = s;
+        } else {         // фиксируем колонку (col = номер колонки, row = позиция в колонке)
+            process[row][col] = s;   // ВАЖНО: именно [row][col], не наоборот
         }
+    }
+
+    private CellState[][] cloneGrid(CellState[][] src) {
+        CellState[][] dst = new CellState[height][width];
+        copyGrid(src, dst);
+        return dst;
+    }
+
+    private void copyGrid(CellState[][] src, CellState[][] dst) {
+        for (int r = 0; r < height; r++) {
+            System.arraycopy(src[r], 0, dst[r], 0, width);
+        }
+    }
+
+    private byte toCode(CellState cs) {
+        if (cs == CellState.FILLED) return 1;
+        if (cs == CellState.BLANK)  return 2;
+        return 0;
     }
 }
